@@ -1,0 +1,37 @@
+# cargo-deny configuration for oauthkit.
+# Run: cargo deny check
+
+[advisories]
+version = 2
+ignore = []
+
+[licenses]
+version = 2
+# oauthkit ships Apache-2.0; only permit licenses compatible with redistribution.
+allow = [
+    "Apache-2.0",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "MPL-2.0",
+]
+confidence-threshold = 0.9
+
+[[licenses.exceptions]]
+# ring bundles an OpenSSL-derived license alongside ISC/MIT.
+allow = ["OpenSSL"]
+name = "ring"
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Keep the dependency surface small and intentional for a security-sensitive SDK.
+highlight = "all"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

@@ -1,0 +1,151 @@
+# oauthkit built-in provider registry (Tier-B data).
+#
+# This is the single, data-driven source of provider breadth. A consuming CLI
+# extends it by merging its own TOML (Registry::merge) rather than editing this
+# file, and adds provider-specific OAuth (its own registered client_id/redirect)
+# the same way.
+#
+# Each provider lists one or more methods in presentation order. A method is one
+# of: flow = "oauth" (authorization-code + PKCE, loopback redirect),
+# flow = "device" (RFC 8628 device-code), or flow = "api_key".
+#
+# The API-key entries below carry each provider's real environment variable,
+# console URL, and key prefix, so a CLI can pick keys up non-interactively and
+# give the user an accurate "get a key here" link. OAuth/device entries are only
+# included where the provider publishes stable public client parameters.
+
+[[provider]]
+id = "anthropic"
+display_name = "Anthropic"
+note = "Claude models"
+  [[provider.methods]]
+  flow = "api_key"
+  env_var = "ANTHROPIC_API_KEY"
+  console_url = "https://console.anthropic.com/settings/keys"
+  key_prefix = "sk-ant-"
+  label = "Paste an Anthropic API key"
+
+[[provider]]
+id = "openai"
+display_name = "OpenAI"
+note = "GPT and Codex models"
+  [[provider.methods]]
+  flow = "api_key"
+  env_var = "OPENAI_API_KEY"
+  console_url = "https://platform.openai.com/api-keys"
+  key_prefix = "sk-"
+  label = "Paste an OpenAI API key"
+
+[[provider]]
+id = "github-copilot"
+display_name = "GitHub Copilot"
+note = "Sign in with your GitHub account"
+  [[provider.methods]]
+  flow = "device"
+  device_authorization_url = "https://github.com/login/device/code"
+  token_url = "https://github.com/login/oauth/access_token"
+  client_id = "Iv1.b507a08c87ecfe98"
+  scopes = ["read:user"]
+  label = "Sign in with GitHub"
+
+[[provider]]
+id = "google"
+display_name = "Google Gemini"
+note = "Gemini models via AI Studio"
+  [[provider.methods]]
+  flow = "api_key"
+  env_var = "GEMINI_API_KEY"
+  console_url = "https://aistudio.google.com/apikey"
+  label = "Paste a Gemini API key"
+
+[[provider]]
+id = "deepseek"
+display_name = "DeepSeek"
+  [[provider.methods]]
+  flow = "api_key"
+  env_var = "DEEPSEEK_API_KEY"
+  console_url = "https://platform.deepseek.com/api_keys"
+  key_prefix = "sk-"
+  label = "Paste a DeepSeek API key"
+
+[[provider]]
+id = "moonshot"
+display_name = "Moonshot (Kimi)"
+note = "Kimi models"
+  [[provider.methods]]
+  flow = "api_key"
+  env_var = "MOONSHOT_API_KEY"
+  console_url = "https://platform.moonshot.ai/console/api-keys"
+  key_prefix = "sk-"
+  label = "Paste a Moonshot API key"
+
+[[provider]]
+id = "zai"
+display_name = "Z.ai (GLM)"
+note = "GLM models"
+  [[provider.methods]]
+  flow = "api_key"
+  env_var = "ZAI_API_KEY"
+  console_url = "https://z.ai/manage-apikey/apikey-list"
+  label = "Paste a Z.ai API key"
+
+[[provider]]
+id = "openrouter"
+display_name = "OpenRouter"
+note = "Many models through one gateway"
+  [[provider.methods]]
+  flow = "api_key"
+  env_var = "OPENROUTER_API_KEY"
+  console_url = "https://openrouter.ai/keys"
+  key_prefix = "sk-or-"
+  label = "Paste an OpenRouter API key"
+
+[[provider]]
+id = "xai"
+display_name = "xAI (Grok)"
+  [[provider.methods]]
+  flow = "api_key"
+  env_var = "XAI_API_KEY"
+  console_url = "https://console.x.ai"
+  key_prefix = "xai-"
+  label = "Paste an xAI API key"
+
+[[provider]]
+id = "groq"
+display_name = "Groq"
+note = "Fast open-model inference"
+  [[provider.methods]]
+  flow = "api_key"
+  env_var = "GROQ_API_KEY"
+  console_url = "https://console.groq.com/keys"
+  key_prefix = "gsk_"
+  label = "Paste a Groq API key"
+
+[[provider]]
+id = "mistral"
+display_name = "Mistral"
+  [[provider.methods]]
+  flow = "api_key"
+  env_var = "MISTRAL_API_KEY"
+  console_url = "https://console.mistral.ai/api-keys"
+  label = "Paste a Mistral API key"
+
+[[provider]]
+id = "azure-openai"
+display_name = "Azure OpenAI"
+note = "OpenAI models on Azure"
+  [[provider.methods]]
+  flow = "api_key"
+  env_var = "AZURE_OPENAI_API_KEY"
+  console_url = "https://portal.azure.com"
+  label = "Paste an Azure OpenAI API key"
+
+[[provider]]
+id = "amazon-bedrock"
+display_name = "Amazon Bedrock"
+note = "Foundation models on AWS"
+  [[provider.methods]]
+  flow = "api_key"
+  env_var = "AWS_BEARER_TOKEN_BEDROCK"
+  console_url = "https://console.aws.amazon.com/bedrock"
+  label = "Paste a Bedrock bearer token"
