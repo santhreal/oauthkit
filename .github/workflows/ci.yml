@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_MIN_STACK: "8388608"
+
+jobs:
+  # Format, lint, and the full test suite on the pinned toolchain
+  # (rust-toolchain.toml pins 1.88, the dev/test floor).
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned toolchain
+        run: rustup show
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Test (all features)
+        run: cargo test --all-features
+      - name: Doc tests (README + rustdoc examples)
+        run: cargo test --doc --all-features
+
+  # Validate the advertised consumer MSRV (1.86) by building the library without
+  # dev-dependencies. The full suite needs 1.88 (wiremock dev-dep let-chains), but
+  # a consumer only pulls the non-dev deps, whose floor is 1.86 (icu via idna).
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust 1.86.0
+        run: rustup toolchain install 1.86.0 --profile minimal
+      - name: Build library at MSRV
+        run: cargo +1.86.0 build --lib
+
+  # License and advisory audit.
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - run: cargo deny check

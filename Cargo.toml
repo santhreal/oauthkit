@@ -1,0 +1,39 @@
+[package]
+name = "oauthkit"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.86"
+description = "Provider-registry-driven OAuth SDK for CLIs: authorization-code+PKCE, device-code, and API-key sign-in across many model providers, with pluggable credential storage."
+license = "Apache-2.0"
+repository = "https://github.com/santhreal/oauthkit"
+homepage = "https://github.com/santhreal/oauthkit"
+documentation = "https://docs.rs/oauthkit"
+readme = "README.md"
+keywords = ["oauth", "pkce", "device-code", "authentication", "cli"]
+categories = ["authentication", "command-line-utilities", "api-bindings"]
+
+[features]
+default = []
+# An opt-in `CredentialStore` that encrypts credentials at rest with a
+# user-supplied key (pure-Rust ChaCha20-Poly1305; no system dependencies).
+encrypted-store = ["dep:chacha20poly1305"]
+
+[dependencies]
+base64 = "0.22.1"
+chacha20poly1305 = { version = "0.10", optional = true }
+rand = "0.9"
+reqwest = "0.12"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2.0.17"
+tiny_http = "0.12"
+tokio = { version = "1", features = ["time", "rt"] }
+toml = "0.9.5"
+tracing = "0.1"
+url = "2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+tracing-subscriber = { version = "0.3", features = ["fmt"] }
+wiremock = "0.6"

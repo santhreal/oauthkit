@@ -1,0 +1,10 @@
+# The library's consumer MSRV is 1.86 (Cargo.toml `rust-version`), set by the
+# real dependency floor (icu via url/idna). It is validated separately with
+# `cargo build --lib` under 1.86, which excludes dev-dependencies.
+#
+# The full test suite pulls `wiremock` (dev-dep), which uses let-chains stabilized
+# in 1.88, so the development/CI toolchain floor is 1.88. Pin the toolchain here to
+# that floor so `cargo test` builds reproducibly; it does not raise the crate MSRV.
+[toolchain]
+channel = "1.88.0"
+components = ["rustfmt", "clippy"]
