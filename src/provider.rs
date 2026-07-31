@@ -48,7 +48,12 @@ impl AuthMethod {
 }
 
 /// Configuration for an authorization-code + PKCE OAuth flow.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// This type is `#[non_exhaustive]`: new provider knobs are added over time as
+/// compatible (patch) releases, so construct it with [`OAuthConfig::new`] and
+/// then set the optional fields you need, rather than a struct literal.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct OAuthConfig {
     /// The authorization endpoint (front-channel, opened in the browser).
     pub authorize_url: String,
@@ -89,6 +94,25 @@ pub struct OAuthConfig {
     /// Optional human label for a picker.
     #[serde(default)]
     pub label: Option<String>,
+}
+
+impl OAuthConfig {
+    /// Build a config from the three required endpoints/ids, defaulting every
+    /// optional field. Set the optional fields (`scopes`, `audience`, `prompt`,
+    /// `login_hint`, `redirect_uri`, `loopback_port`, `extra_authorize_params`,
+    /// `label`) on the returned value as needed.
+    pub fn new(
+        authorize_url: impl Into<String>,
+        token_url: impl Into<String>,
+        client_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            authorize_url: authorize_url.into(),
+            token_url: token_url.into(),
+            client_id: client_id.into(),
+            ..Self::default()
+        }
+    }
 }
 
 /// Configuration for a device-code (RFC 8628) flow.
@@ -306,6 +330,19 @@ fn validate_url(url: &str, provider_id: &str, field: &str) -> Result<()> {
             "provider `{provider_id}` {field} must use http or https, got `{}`",
             parsed.scheme()
         )));
+    }
+    // Tokens and authorization codes cross these endpoints, so TLS is mandatory
+    // (CWE-319). Plain http is allowed only to loopback hosts, the documented
+    // pattern for local provider development and in-process test servers.
+    if parsed.scheme() == "http" {
+        match parsed.host_str() {
+            Some("127.0.0.1" | "localhost" | "::1") => {}
+            other => {
+                return Err(Error::Registry(format!(
+                    "provider `{provider_id}` {field} must use https (http is allowed only to loopback hosts, got {other:?})"
+                )));
+            }
+        }
     }
     Ok(())
 }

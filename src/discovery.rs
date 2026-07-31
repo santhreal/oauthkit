@@ -57,17 +57,12 @@ impl OidcMetadata {
         scopes: Vec<String>,
     ) -> OAuthConfig {
         OAuthConfig {
-            authorize_url: self.authorization_endpoint.clone(),
-            token_url: self.token_endpoint.clone(),
-            client_id: client_id.into(),
             scopes,
-            redirect_uri: None,
-            loopback_port: None,
-            audience: None,
-            prompt: None,
-            login_hint: None,
-            extra_authorize_params: Vec::new(),
-            label: None,
+            ..OAuthConfig::new(
+                self.authorization_endpoint.clone(),
+                self.token_endpoint.clone(),
+                client_id,
+            )
         }
     }
 }

@@ -24,7 +24,7 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A standard OAuth 2.0 token endpoint response (RFC 6749 §5.1).
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 pub(crate) struct TokenResponse {
     pub access_token: String,
     #[serde(default)]
@@ -34,6 +34,19 @@ pub(crate) struct TokenResponse {
     /// RFC 6749 §5.1 lists `token_type` as required. A response that omits it
     /// is non-conforming and is rejected as malformed.
     pub token_type: String,
+}
+
+impl std::fmt::Debug for TokenResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The response carries live token material; a derived Debug would put
+        // access/refresh tokens into logs (CWE-532). Record shape only.
+        f.debug_struct("TokenResponse")
+            .field("access_token", &"<redacted>")
+            .field("refresh_token", &self.refresh_token.as_ref().map(|_| "<redacted>"))
+            .field("expires_in", &self.expires_in)
+            .field("token_type", &self.token_type)
+            .finish()
+    }
 }
 
 /// A standard OAuth 2.0 error response (RFC 6749 §5.2).
@@ -67,7 +80,11 @@ pub(crate) fn expiry_from_expires_in(expires_in: Option<i64>) -> Option<i64> {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
-    Some(now + expires_in)
+    // `expires_in` comes straight from an untrusted provider response; a hostile or
+    // buggy `i64::MAX`/`i64::MIN` would overflow a plain `now + expires_in` (debug
+    // panic, release wraparound to a nonsensical expiry). Saturate at the i64 bounds
+    // instead: a huge value clamps to "effectively never expires".
+    Some(now.saturating_add(expires_in))
 }
 
 /// Try to parse an OAuth error body into a short, safe detail string.

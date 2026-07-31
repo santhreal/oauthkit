@@ -27,6 +27,14 @@ resulting credentials behind a pluggable trait.
   `DeviceCodeConfig`, `ApiKeyConfig`). `oauth()`, `device()`, and `api_key()`
   return the first method of that kind; validation guarantees uniqueness, so
   first-match is deterministic.
+- `OAuthConfig` — the authorization-code + PKCE parameters (`authorize_url`,
+  `token_url`, `client_id`, `scopes`) plus typed optional authorize params
+  (`audience`, `prompt`, `login_hint`), `redirect_uri` / `loopback_port`, and
+  `extra_authorize_params` for provider-specific keys (a custom key that collides
+  with one oauthkit already emits, including a typed field, is dropped). The type
+  is `#[non_exhaustive]` and derives `Default`; construct it with
+  `OAuthConfig::new(authorize_url, token_url, client_id)` and set the optional
+  fields on the returned value so new knobs can be added as compatible releases.
 - `Credential` — an enum with `OAuth { access_token, refresh_token?,
   token_type, .. }` and `ApiKey { key }` variants. The type enforces a valid
   shape; `secret()` returns the sensitive material and `Debug` is redacted.

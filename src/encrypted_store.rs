@@ -26,7 +26,7 @@ use crate::credentials::CredentialStore;
 use crate::error::Error;
 use crate::error::Result;
 
-/// The ChaCha20-Poly1305 nonce size (RFC 8439: 96 bits).
+    /// The ChaCha20-Poly1305 nonce size (RFC 8439: 96 bits).
 const NONCE_LEN: usize = 12;
 
 /// A [`CredentialStore`] that encrypts every credential at rest with a
@@ -55,7 +55,13 @@ impl EncryptedStore {
     /// The number of sealed (encrypted) bytes currently held for `provider`, if
     /// any. Useful to prove data is stored without exposing plaintext.
     pub fn sealed_len(&self, provider: &str) -> Option<usize> {
-        self.sealed.lock().unwrap().get(provider).map(Vec::len)
+        // Read-only probe: a poisoned lock still holds consistent map state, so
+        // recover the guard instead of panicking or hiding the entry.
+        let guard = match self.sealed.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.get(provider).map(Vec::len)
     }
 
     /// Encrypt a credential into a self-contained sealed byte string
@@ -95,6 +101,13 @@ impl EncryptedStore {
         serde_json::from_slice(&plaintext)
             .map_err(|e| Error::Store(format!("could not deserialize credential: {e}")))
     }
+    #[cfg(test)]
+    pub(crate) fn poison_lock_for_test(&self) {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = self.sealed.lock();
+            panic!("poisoning the store lock for the poisoned-lock regression test");
+        }));
+    }
 }
 
 impl CredentialStore for EncryptedStore {
@@ -102,13 +115,18 @@ impl CredentialStore for EncryptedStore {
         let sealed = self.seal(credential)?;
         self.sealed
             .lock()
-            .unwrap()
+            .map_err(|_| Error::Store("encrypted store lock poisoned".into()))?
             .insert(credential.provider().to_string(), sealed);
         Ok(())
     }
 
     fn get(&self, provider: &str) -> Result<Option<Credential>> {
-        let sealed = self.sealed.lock().unwrap().get(provider).cloned();
+        let sealed = self
+            .sealed
+            .lock()
+            .map_err(|_| Error::Store("encrypted store lock poisoned".into()))?
+            .get(provider)
+            .cloned();
         match sealed {
             Some(bytes) => Ok(Some(self.open(&bytes)?)),
             None => Ok(None),
@@ -116,12 +134,21 @@ impl CredentialStore for EncryptedStore {
     }
 
     fn delete(&self, provider: &str) -> Result<()> {
-        self.sealed.lock().unwrap().remove(provider);
+        self.sealed
+            .lock()
+            .map_err(|_| Error::Store("encrypted store lock poisoned".into()))?
+            .remove(provider);
         Ok(())
     }
 
     fn providers(&self) -> Result<Vec<String>> {
-        let mut providers: Vec<String> = self.sealed.lock().unwrap().keys().cloned().collect();
+        let mut providers: Vec<String> = self
+            .sealed
+            .lock()
+            .map_err(|_| Error::Store("encrypted store lock poisoned".into()))?
+            .keys()
+            .cloned()
+            .collect();
         providers.sort();
         Ok(providers)
     }

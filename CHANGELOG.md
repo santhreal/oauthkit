@@ -7,13 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-07-30
+
+### Security
+- `TokenResponse` and `DeviceAuthorizationResponse` no longer derive `Debug`: the derived impl would have printed live access/refresh tokens and device codes into any `{:?}` log (CWE-532). Manual Debug impls now redact secrets and show shape only.
+- Registry validation now requires `https` for authorize/token/device-authorization endpoints (CWE-319); plain `http` is accepted only to loopback hosts (`127.0.0.1`, `localhost`, `::1`) for local development and in-process test servers.
+
+### Fixed
+- `EncryptedStore` operations (`put`, `get`, `delete`, `providers`) no longer panic on a poisoned lock; they return `Error::Store`, matching `MemoryStore`. The read-only `sealed_len` probe recovers the guard instead of unwrapping.
+
+## [0.2.0] - 2026-07-14
+
+### Fixed
+- The ephemeral loopback redirect server now prefers IPv4 (`127.0.0.1`) and falls
+  back to IPv6 (`[::1]`), keeping the redirect URI host coherent with whichever
+  family actually bound. Previously it bound `127.0.0.1` only, failing on
+  IPv6-only-localhost hosts.
+- Token-expiry math no longer overflows on a hostile or buggy provider
+  `expires_in`. It is parsed straight from the token response, so an `i64::MAX` /
+  `i64::MIN` value used to panic (debug) or wrap to a nonsensical expiry (release);
+  the absolute expiry is now computed with a saturating add.
+- Device-code polling now honors `max_wait` regardless of the server-advertised
+  `interval`. Each poll sleep is bounded by the time left until the deadline, so a
+  hostile or buggy provider returning a huge `interval` can no longer hang the
+  sign-in far past the caller's timeout.
+- The loopback redirect handler no longer aborts a sign-in on a stray request. A
+  request carrying only a `state` param (no authorization code) is ignored rather
+  than treated as a state mismatch, so a probe to the ephemeral callback port can
+  no longer cancel an in-progress sign-in. A real redirect with a mismatched state
+  still fails loud, so CSRF protection is unchanged.
+
 ### Added
 - Standalone crate metadata: Apache-2.0 `LICENSE`, `CHANGELOG.md`, `SPEC.md`,
   `deny.toml`, and `rust-toolchain.toml`.
 - Typed `OAuthConfig` fields `audience`, `prompt`, and `login_hint` that merge
   into the authorize URL, alongside `extra_authorize_params` for custom keys. A
-  custom extra that collides with a typed or protocol parameter is dropped so the
-  authorize URL never carries a duplicate query key.
+  custom extra whose key collides with a typed/protocol parameter OR with an
+  earlier custom entry is dropped (first occurrence wins), so the authorize URL
+  never carries a duplicate query key. A property test fuzzes the builder with
+  arbitrary hostile keys/values to lock this invariant.
 - `tracing` instrumentation on the authorization-code, device-code, and refresh
   flows (`#[tracing::instrument(skip_all)]` with only non-secret fields). A test
   captures the span/event output and asserts no token material is ever logged.
@@ -34,6 +66,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `cargo test --all-features`, doc tests, a 1.86 MSRV `--lib` build, and `cargo deny`.
 
 ### Changed
+- **Breaking:** `OAuthConfig` is now `#[non_exhaustive]` and derives `Default`, and
+  gains an `OAuthConfig::new(authorize_url, token_url, client_id)` constructor.
+  Construct it via `new` (then set the optional fields) instead of a struct literal;
+  future provider knobs can then be added as compatible releases. Registry/TOML and
+  `OidcMetadata::to_oauth_config` construction are unaffected.
 - `Credential::is_expired` uses `is_some_and`; a redirect-URI validation error and
   a few call sites use inlined format arguments (clippy-clean, no behavior change).
 
@@ -61,5 +98,6 @@ standalone, provider-registry-driven OAuth SDK for CLIs.
 - All dependencies pinned to concrete versions (no workspace inheritance);
   `anyhow` removed.
 
-[Unreleased]: https://github.com/santhreal/oauthkit/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/santhreal/oauthkit/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/santhreal/oauthkit/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/santhreal/oauthkit/releases/tag/v0.1.0

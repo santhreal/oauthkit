@@ -19,17 +19,33 @@ use crate::flow::post_token_form;
 use crate::provider::DeviceCodeConfig;
 
 /// The device-authorization response (RFC 8628 §3.2).
-#[derive(Debug, Deserialize)]
-struct DeviceAuthorizationResponse {
-    device_code: String,
-    user_code: String,
-    verification_uri: String,
+#[derive(Deserialize)]
+pub(crate) struct DeviceAuthorizationResponse {
+    pub device_code: String,
+    pub user_code: String,
+    pub verification_uri: String,
     #[serde(default)]
-    verification_uri_complete: Option<String>,
+    pub verification_uri_complete: Option<String>,
     #[serde(default)]
-    expires_in: Option<i64>,
+    pub expires_in: Option<i64>,
     #[serde(default)]
-    interval: Option<i64>,
+    pub interval: Option<i64>,
+}
+
+impl std::fmt::Debug for DeviceAuthorizationResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `device_code` is a bearer credential for the token endpoint; a derived
+        // Debug would put it into logs (CWE-532). `user_code` and the
+        // verification URIs are front-channel values and stay visible.
+        f.debug_struct("DeviceAuthorizationResponse")
+            .field("device_code", &"<redacted>")
+            .field("user_code", &self.user_code)
+            .field("verification_uri", &self.verification_uri)
+            .field("verification_uri_complete", &self.verification_uri_complete)
+            .field("expires_in", &self.expires_in)
+            .field("interval", &self.interval)
+            .finish()
+    }
 }
 
 /// A pending device authorization the user must approve out of band.
@@ -103,11 +119,15 @@ impl DeviceAuthorization {
         tracing::debug!("polling for device authorization approval");
 
         loop {
-            if Instant::now() >= deadline {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
                 tracing::warn!("device authorization timed out");
                 return Err(Error::Timeout);
             }
-            tokio::time::sleep(interval).await;
+            // Never sleep past the deadline: a server-provided `interval` larger than
+            // the time left must not extend the wait beyond `max_wait` (a hostile or
+            // buggy `interval` would otherwise hang the sign-in far past the timeout).
+            tokio::time::sleep(interval.min(remaining)).await;
 
             let form = [
                 ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),

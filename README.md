@@ -95,6 +95,21 @@ prompt = "consent"
 extra_authorize_params = [["custom_toggle", "1"]]
 ```
 
+To build a config in code, use `OAuthConfig::new` (the type is `#[non_exhaustive]`,
+so set the optional fields on the returned value rather than a struct literal):
+
+```rust
+use oauthkit::OAuthConfig;
+
+let mut oauth = OAuthConfig::new(
+    "https://auth.acme.example/authorize",
+    "https://auth.acme.example/oauth/token",
+    "your-registered-client-id",
+);
+oauth.scopes = vec!["openid".into(), "profile".into()];
+oauth.audience = Some("https://api.acme.example".into());
+```
+
 If the provider publishes an OpenID Connect discovery document, let oauthkit read
 the endpoints instead of hand-copying them:
 
@@ -114,7 +129,7 @@ Store credentials encrypted at rest with the optional `encrypted-store` feature
 (pure-Rust ChaCha20-Poly1305 under a 32-byte key you supply):
 
 ```toml
-oauthkit = { version = "0.1", features = ["encrypted-store"] }
+oauthkit = { version = "0.2", features = ["encrypted-store"] }
 ```
 
 ## License

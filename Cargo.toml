@@ -1,15 +1,15 @@
 [package]
 name = "oauthkit"
-version = "0.1.0"
+version = "0.2.1"
 edition = "2024"
 rust-version = "1.86"
 description = "Provider-registry-driven OAuth SDK for CLIs: authorization-code+PKCE, device-code, and API-key sign-in across many model providers, with pluggable credential storage."
 license = "Apache-2.0"
 repository = "https://github.com/santhreal/oauthkit"
-homepage = "https://github.com/santhreal/oauthkit"
+homepage = "https://santh.dev"
 documentation = "https://docs.rs/oauthkit"
 readme = "README.md"
-keywords = ["oauth", "pkce", "device-code", "authentication", "cli"]
+keywords = ["oauth", "oauth2", "pkce", "authentication", "cli"]
 categories = ["authentication", "command-line-utilities", "api-bindings"]
 
 [features]
@@ -34,6 +34,7 @@ tracing = "0.1"
 url = "2"
 
 [dev-dependencies]
+proptest = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
 wiremock = "0.6"

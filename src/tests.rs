@@ -16,18 +16,45 @@ use crate::provider::Provider;
 
 fn oauth_config() -> OAuthConfig {
     OAuthConfig {
-        authorize_url: "https://auth.example.com/authorize".to_string(),
-        token_url: "https://auth.example.com/token".to_string(),
-        client_id: "client-123".to_string(),
         scopes: vec!["openid".to_string(), "profile".to_string()],
-        redirect_uri: None,
-        loopback_port: None,
-        audience: None,
-        prompt: None,
-        login_hint: None,
         extra_authorize_params: vec![("prompt".to_string(), "login".to_string())],
-        label: None,
+        ..OAuthConfig::new(
+            "https://auth.example.com/authorize",
+            "https://auth.example.com/token",
+            "client-123",
+        )
     }
+}
+
+#[test]
+fn oauth_config_new_sets_required_and_defaults_the_rest() {
+    let cfg = OAuthConfig::new(
+        "https://auth.example.com/authorize",
+        "https://auth.example.com/token",
+        "client-123",
+    );
+    assert_eq!(cfg.authorize_url, "https://auth.example.com/authorize");
+    assert_eq!(cfg.token_url, "https://auth.example.com/token");
+    assert_eq!(cfg.client_id, "client-123");
+    assert!(cfg.scopes.is_empty());
+    assert_eq!(cfg.redirect_uri, None);
+    assert_eq!(cfg.loopback_port, None);
+    assert_eq!(cfg.audience, None);
+    assert_eq!(cfg.prompt, None);
+    assert_eq!(cfg.login_hint, None);
+    assert!(cfg.extra_authorize_params.is_empty());
+    assert_eq!(cfg.label, None);
+    // The `new` + functional-update path matches an all-defaults config.
+    assert_eq!(
+        cfg,
+        OAuthConfig {
+            ..OAuthConfig::new(
+                "https://auth.example.com/authorize",
+                "https://auth.example.com/token",
+                "client-123",
+            )
+        }
+    );
 }
 
 /// A wiremock responder that replies with a fixed sequence of `(status, body)`
@@ -462,6 +489,90 @@ async fn authorization_code_custom_redirect_path_reaches_the_callback_and_exchan
 }
 
 #[tokio::test]
+async fn authorization_code_ignores_stray_loopback_requests_before_the_redirect() {
+    use std::time::Duration;
+
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+
+    let token_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "access-token",
+            "token_type": "Bearer",
+        })))
+        .mount(&token_server)
+        .await;
+
+    let mut config = oauth_config();
+    config.token_url = format!("{}/token", token_server.uri());
+    config.redirect_uri = None; // ephemeral loopback with the default /callback path
+
+    let begun =
+        authorization_code::begin("example", &config).expect("begin binds a loopback listener");
+    let state = url::Url::parse(&begun.authorize_url)
+        .unwrap()
+        .query_pairs()
+        .find(|(k, _)| k == "state")
+        .map(|(_, v)| v.into_owned())
+        .unwrap();
+    let redirect_uri = begun.session.redirect_uri().to_string();
+    let base = redirect_uri
+        .strip_suffix("/callback")
+        .expect("the default loopback redirect uses the /callback path")
+        .to_string();
+
+    let session_task =
+        tokio::spawn(async move { begun.session.wait(Duration::from_secs(5)).await });
+
+    let client = reqwest::Client::new();
+
+    // A wrong-path probe (e.g. a browser favicon fetch) is ignored with a 404.
+    let probe = client
+        .get(format!("{base}/favicon.ico"))
+        .send()
+        .await
+        .expect("probe reaches the loopback");
+    assert_eq!(
+        probe.status().as_u16(),
+        404,
+        "a non-callback path is ignored"
+    );
+
+    // A stray request that carries only a `state` param (no authorization code) is
+    // NOT a redirect and must not abort the sign-in — any local process can hit this
+    // ephemeral port. It is ignored and the flow keeps waiting.
+    let stray_state = client
+        .get(format!("{base}/callback?state=unrelated-noise"))
+        .send()
+        .await
+        .expect("stray request reaches the loopback");
+    assert_eq!(
+        stray_state.status().as_u16(),
+        400,
+        "a code-less request is ignored, not accepted"
+    );
+
+    // The genuine redirect finally arrives and is accepted.
+    let real = client
+        .get(format!("{base}/callback?code=the-code&state={state}"))
+        .send()
+        .await
+        .expect("the real redirect reaches the loopback");
+    assert!(real.status().is_success());
+
+    let credential = session_task
+        .await
+        .expect("wait task completed")
+        .expect("stray requests must not break a sign-in that later gets a valid redirect");
+    assert_eq!(credential.secret(), Some("access-token"));
+}
+
+#[tokio::test]
 async fn authorization_code_rejects_a_state_mismatch() {
     use std::time::Duration;
 
@@ -601,6 +712,73 @@ async fn device_poll_honors_pending_and_slow_down_before_succeeding() {
     assert_eq!(credential.provider(), "acme");
     assert_eq!(credential.secret(), Some("device-access-token"));
     assert_eq!(credential.token_type().map(|s| s.as_str()), Some("Bearer"));
+}
+
+#[tokio::test]
+async fn device_poll_honors_max_wait_despite_a_huge_server_interval() {
+    use std::time::Duration;
+    use std::time::Instant;
+
+    use crate::flow::device_code;
+    use crate::provider::DeviceCodeConfig;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+
+    let device_server = MockServer::start().await;
+    let token_server = MockServer::start().await;
+
+    // A hostile/buggy server advertises a gigantic polling interval.
+    Mock::given(method("POST"))
+        .and(path("/device"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "device_code": "device-abc",
+            "user_code": "WXYZ-9876",
+            "verification_uri": "https://auth.example.com/verify",
+            "expires_in": 900,
+            "interval": 1_000_000,
+        })))
+        .mount(&device_server)
+        .await;
+
+    // Approval never arrives; the endpoint always reports pending.
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+            "error": "authorization_pending"
+        })))
+        .mount(&token_server)
+        .await;
+
+    let config = DeviceCodeConfig {
+        device_authorization_url: format!("{}/device", device_server.uri()),
+        token_url: format!("{}/token", token_server.uri()),
+        client_id: "client-123".to_string(),
+        scopes: vec!["openid".to_string()],
+        label: None,
+    };
+
+    let auth = device_code::request("acme", &config)
+        .await
+        .expect("device authorization request succeeds");
+
+    // With a 200ms budget, poll must time out promptly rather than sleeping the
+    // advertised 1,000,000-second interval. A generous 30s ceiling keeps the
+    // assertion robust while still failing loudly if the interval is honored.
+    let started = Instant::now();
+    let result = auth.poll(Duration::from_millis(200)).await;
+    let elapsed = started.elapsed();
+
+    assert!(
+        matches!(result, Err(crate::Error::Timeout)),
+        "a never-approved device flow must time out, got {result:?}"
+    );
+    assert!(
+        elapsed < Duration::from_secs(30),
+        "poll must honor max_wait and not sleep the huge server interval; took {elapsed:?}"
+    );
 }
 
 #[tokio::test]
@@ -794,6 +972,136 @@ client_id = "client"
     );
 }
 
+/// Locks out the cleartext-token-endpoint defect (CWE-319): `validate_url`
+/// previously accepted plain `http` for authorize/token/device endpoints, so
+/// a registry entry could send authorization codes and tokens over cleartext.
+/// Non-loopback endpoints must now use https; http stays allowed only to
+/// loopback hosts (local provider development, in-process test servers).
+#[test]
+fn registry_requires_tls_for_non_loopback_endpoints() {
+    let err = Registry::from_toml(
+        r#"
+[[provider]]
+id = "bad"
+display_name = "Bad"
+
+[[provider.methods]]
+flow = "oauth"
+authorize_url = "https://auth.example.com/authorize"
+token_url = "http://auth.example.com/token"
+client_id = "client"
+"#,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("must use https"), "got {err}");
+
+    let err = Registry::from_toml(
+        r#"
+[[provider]]
+id = "bad"
+display_name = "Bad"
+
+[[provider.methods]]
+flow = "oauth"
+authorize_url = "http://auth.example.com/authorize"
+token_url = "https://auth.example.com/token"
+client_id = "client"
+"#,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("must use https"), "got {err}");
+
+    let err = Registry::from_toml(
+        r#"
+[[provider]]
+id = "bad"
+display_name = "Bad"
+
+[[provider.methods]]
+flow = "device"
+device_authorization_url = "http://auth.example.com/device"
+token_url = "https://auth.example.com/token"
+client_id = "client"
+"#,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("must use https"), "got {err}");
+
+    // Loopback http endpoints remain valid (local development, test servers).
+    Registry::from_toml(
+        r#"
+[[provider]]
+id = "local"
+display_name = "Local"
+
+[[provider.methods]]
+flow = "oauth"
+authorize_url = "http://127.0.0.1:9000/authorize"
+token_url = "http://localhost:9000/token"
+client_id = "client"
+"#,
+    )
+    .unwrap();
+}
+
+/// Locks out the CWE-532 log-leak latent in the derived `Debug` on the token
+/// endpoint response structs: `TokenResponse` and `DeviceAuthorizationResponse`
+/// carry live token material, and a derived Debug would print it verbatim into
+/// any `{:?}` log or error chain. Debug must show shape only.
+#[test]
+fn token_response_debug_redacts_token_material() {
+    let response = crate::flow::TokenResponse {
+        access_token: "access-secret-value".to_string(),
+        refresh_token: Some("refresh-secret-value".to_string()),
+        expires_in: Some(3600),
+        token_type: "Bearer".to_string(),
+    };
+    let debug = format!("{response:?}");
+    assert!(!debug.contains("access-secret-value"), "got {debug}");
+    assert!(!debug.contains("refresh-secret-value"), "got {debug}");
+    assert!(debug.contains("<redacted>"), "got {debug}");
+
+    let device = crate::flow::device_code::DeviceAuthorizationResponse {
+        device_code: "device-secret-value".to_string(),
+        user_code: "ABCD-EFGH".to_string(),
+        verification_uri: "https://example.com/device".to_string(),
+        verification_uri_complete: None,
+        expires_in: Some(900),
+        interval: Some(5),
+    };
+    let debug = format!("{device:?}");
+    assert!(!debug.contains("device-secret-value"), "got {debug}");
+    assert!(debug.contains("ABCD-EFGH"), "got {debug}");
+}
+
+/// Locks out the poisoned-mutex panic in `EncryptedStore`: `put`/`get`/`delete`
+/// and `providers` used `lock().unwrap()`, so any panic while holding the lock
+/// turned every later store operation into a panic. Operations must now return
+/// `Error::Store` (or recover, for the read-only `sealed_len` probe).
+#[cfg(feature = "encrypted-store")]
+#[test]
+fn encrypted_store_survives_poisoned_lock() {
+    let store = crate::EncryptedStore::new([7u8; 32]);
+    let credential = crate::Credential::api_key("anthropic", "sk-ant-test".to_string());
+    store.put(&credential).unwrap();
+    assert!(store.sealed_len("anthropic").is_some());
+
+    store.poison_lock_for_test();
+
+    // Mutating/reading operations fail loud instead of panicking.
+    for result in [
+        store.put(&credential).map(|_| ()),
+        store.get("anthropic").map(|_| ()),
+        store.delete("anthropic"),
+        store.providers().map(|_| ()),
+    ] {
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("poisoned"), "got {err}");
+    }
+    // The read-only probe recovers the guard and still answers.
+    assert!(store.sealed_len("anthropic").is_some());
+}
+
 #[test]
 fn registry_rejects_oauth_redirect_uri_loopback_conflict() {
     let err = Registry::from_toml(
@@ -930,6 +1238,27 @@ fn expiry_from_expires_in_is_absolute_and_optional() {
         (expiry - (now + 3600)).abs() <= 2,
         "expiry {expiry} should be ~{} (now+3600)",
         now + 3600
+    );
+}
+
+#[test]
+fn expiry_from_expires_in_saturates_on_hostile_values() {
+    use crate::flow::expiry_from_expires_in;
+
+    // A hostile/buggy provider `expires_in` must never overflow (debug panic /
+    // release wraparound). `i64::MAX` saturates to `i64::MAX` ("never expires").
+    assert_eq!(
+        expiry_from_expires_in(Some(i64::MAX)),
+        Some(i64::MAX),
+        "an enormous expires_in saturates rather than overflowing"
+    );
+    // A hugely negative `expires_in` must not underflow; it yields an already-past
+    // (negative) expiry, so the credential reads as expired rather than crashing.
+    let min_expiry =
+        expiry_from_expires_in(Some(i64::MIN)).expect("a negative lifetime still yields a value");
+    assert!(
+        min_expiry < 0,
+        "a hugely negative expires_in yields an already-past expiry ({min_expiry}), not a panic"
     );
 }
 
@@ -1764,4 +2093,174 @@ fn encrypted_store_wrong_key_fails_and_nonces_are_fresh() {
     let a = EncryptedStore::new([42u8; 32]).seal(&cred).unwrap();
     let b = EncryptedStore::new([42u8; 32]).seal(&cred).unwrap();
     assert_ne!(a, b, "each seal must use a fresh nonce");
+}
+
+// ---- Property-based (fuzz) coverage ----
+//
+// These stress the pure builders/crypto with thousands of arbitrary inputs,
+// including hostile query metacharacters and duplicate keys, and assert exact
+// invariants (never `!is_empty()`): well-formedness, no duplicate query keys,
+// value round-trips, RFC 7636 conformance, and fail-closed decryption.
+mod property {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        /// For an arbitrary config — including `extra_authorize_params` whose keys
+        /// collide with each other or with protocol/typed parameters, and values
+        /// carrying `&`, `=`, `%`, `+`, or spaces — the authorize URL is always a
+        /// valid URL, carries every required protocol parameter with its exact
+        /// value, never repeats a query key, and round-trips the typed values.
+        #[test]
+        fn authorize_url_is_wellformed_and_deduped_for_arbitrary_config(
+            client_id in "[!-~]{1,40}",
+            scopes in proptest::collection::vec("[!-~]{0,20}", 0..5),
+            audience in proptest::option::of("[ -~]{0,30}"),
+            prompt in proptest::option::of("[ -~]{0,30}"),
+            login_hint in proptest::option::of("[ -~]{0,30}"),
+            extras in proptest::collection::vec(("[!-~]{1,15}", "[ -~]{0,20}"), 0..8),
+        ) {
+            let config = OAuthConfig {
+                scopes: scopes.clone(),
+                audience: audience.clone(),
+                prompt: prompt.clone(),
+                login_hint: login_hint.clone(),
+                extra_authorize_params: extras.clone(),
+                ..OAuthConfig::new(
+                    "https://auth.example.com/authorize",
+                    "https://auth.example.com/token",
+                    client_id.as_str(),
+                )
+            };
+            let pkce = crate::generate_pkce();
+            let state = crate::generate_state();
+            let redirect = "http://127.0.0.1:8080/callback";
+
+            let url_str =
+                authorization_code::build_authorize_url(&config, &pkce, &state, redirect)
+                    .expect("a valid base authorize_url always builds");
+            let url = url::Url::parse(&url_str).expect("output must be a valid URL");
+
+            // No duplicate query keys, ever (the dedup invariant).
+            let keys: Vec<String> = url.query_pairs().map(|(k, _)| k.into_owned()).collect();
+            let mut unique = keys.clone();
+            unique.sort();
+            unique.dedup();
+            prop_assert_eq!(keys.len(), unique.len(), "duplicate query key in {}", url_str);
+
+            let pairs: std::collections::HashMap<String, String> = url
+                .query_pairs()
+                .map(|(k, v)| (k.into_owned(), v.into_owned()))
+                .collect();
+
+            // Required protocol parameters, exact values.
+            prop_assert_eq!(pairs.get("response_type").map(String::as_str), Some("code"));
+            prop_assert_eq!(pairs.get("client_id").map(String::as_str), Some(client_id.as_str()));
+            prop_assert_eq!(pairs.get("redirect_uri").map(String::as_str), Some(redirect));
+            prop_assert_eq!(pairs.get("state").map(String::as_str), Some(state.as_str()));
+            prop_assert_eq!(
+                pairs.get("code_challenge").map(String::as_str),
+                Some(pkce.code_challenge.as_str())
+            );
+            prop_assert_eq!(pairs.get("code_challenge_method").map(String::as_str), Some("S256"));
+
+            // Typed optional params, when set, round-trip to their exact value.
+            if !scopes.is_empty() {
+                let joined = scopes.join(" ");
+                prop_assert_eq!(pairs.get("scope"), Some(&joined));
+            }
+            if let Some(a) = &audience {
+                prop_assert_eq!(pairs.get("audience"), Some(a));
+            }
+            if let Some(p) = &prompt {
+                prop_assert_eq!(pairs.get("prompt"), Some(p));
+            }
+            if let Some(h) = &login_hint {
+                prop_assert_eq!(pairs.get("login_hint"), Some(h));
+            }
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(4096))]
+        /// Every generated PKCE pair satisfies RFC 7636: the verifier is 43..=128
+        /// unreserved chars and the challenge is exactly BASE64URL-NOPAD(SHA256).
+        #[test]
+        fn generated_pkce_always_satisfies_rfc7636(_seed in 0u32..u32::MAX) {
+            use base64::Engine;
+            use sha2::Digest;
+            use sha2::Sha256;
+
+            let pkce = crate::generate_pkce();
+            let len = pkce.code_verifier.len();
+            prop_assert!((43..=128).contains(&len), "verifier length {} out of RFC range", len);
+            prop_assert!(
+                pkce.code_verifier
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
+                "verifier has non-unreserved chars: {}",
+                pkce.code_verifier
+            );
+            prop_assert!(!pkce.code_verifier.ends_with('='), "verifier must be unpadded");
+            let expected = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .encode(Sha256::digest(pkce.code_verifier.as_bytes()));
+            prop_assert_eq!(pkce.code_challenge, expected, "challenge must be S256 of the verifier");
+        }
+    }
+
+    #[cfg(feature = "encrypted-store")]
+    proptest! {
+        /// Seal/open round-trips any credential under any 32-byte key; a wrong key
+        /// or any single-byte tamper fails closed (never yields a credential).
+        #[test]
+        fn encrypted_store_roundtrips_and_fails_closed_for_arbitrary_input(
+            key in proptest::array::uniform32(any::<u8>()),
+            provider in "[!-~]{1,20}",
+            access in "[ -~]{0,40}",
+            refresh in proptest::option::of("[ -~]{0,40}"),
+            token_type in proptest::option::of("[ -~]{0,20}"),
+            expires in proptest::option::of(any::<i64>()),
+        ) {
+            use crate::EncryptedStore;
+
+            let cred = Credential::oauth(provider, access, refresh, expires, token_type);
+            let store = EncryptedStore::new(key);
+            let sealed = store.seal(&cred).expect("seal succeeds");
+
+            let opened = store.open(&sealed).expect("open with the sealing key succeeds");
+            prop_assert!(opened == cred, "round-trip must reproduce the exact credential");
+
+            // A wrong key fails closed (flipping any byte always changes the key).
+            let mut wrong = key;
+            wrong[0] ^= 0xFF;
+            prop_assert!(
+                EncryptedStore::new(wrong).open(&sealed).is_err(),
+                "a wrong key must fail, never yield a credential"
+            );
+
+            // Any single-byte tamper (nonce, ciphertext, or tag) fails the AEAD.
+            let mut tampered = sealed.clone();
+            let last = tampered.len() - 1;
+            tampered[last] ^= 0x01;
+            prop_assert!(
+                store.open(&tampered).is_err(),
+                "a tampered sealed blob must fail authentication"
+            );
+        }
+    }
+
+    #[cfg(feature = "encrypted-store")]
+    proptest! {
+        /// `open` parses a length-prefixed nonce off an untrusted blob (from disk or
+        /// a keyring). Any arbitrary bytes — including empty and shorter-than-nonce —
+        /// must fail closed with an error, never panic on the slice boundary.
+        #[test]
+        fn encrypted_store_open_never_panics_on_arbitrary_bytes(blob in proptest::collection::vec(any::<u8>(), 0..64)) {
+            use crate::EncryptedStore;
+            let store = EncryptedStore::new([9u8; 32]);
+            // Must return (Ok or Err) without panicking; a random blob is never a
+            // valid sealed credential, so it must be an Err.
+            prop_assert!(store.open(&blob).is_err(), "random bytes must not decrypt to a credential");
+        }
+    }
 }

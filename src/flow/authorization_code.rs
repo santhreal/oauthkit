@@ -85,14 +85,14 @@ pub fn begin(provider: &str, config: &OAuthConfig) -> Result<BeganAuthorization>
         }
         None => {
             let requested_port = config.loopback_port.unwrap_or(0);
-            let server = tiny_http::Server::http(("127.0.0.1", requested_port))
-                .map_err(|e| Error::Loopback(e.to_string()))?;
+            let (server, host) = bind_loopback(requested_port)?;
             let port = server
                 .server_addr()
                 .to_ip()
                 .map(|addr| addr.port())
                 .ok_or_else(|| Error::Loopback("listener has no IP address".into()))?;
-            let redirect_uri = format!("http://127.0.0.1:{port}/callback");
+            // The redirect host is kept coherent with the family that actually bound.
+            let redirect_uri = format!("http://{host}:{port}/callback");
             (server, redirect_uri, "/callback".to_string())
         }
     };
@@ -113,8 +113,24 @@ pub fn begin(provider: &str, config: &OAuthConfig) -> Result<BeganAuthorization>
     })
 }
 
+/// Bind an ephemeral/fixed-port loopback listener, preferring IPv4 and falling
+/// back to IPv6 so the flow works on hosts where only one localhost family is
+/// available. Returns the listener and the URL host string (`127.0.0.1` or
+/// `[::1]`) to keep the redirect URI coherent with the bound address.
+fn bind_loopback(port: u16) -> Result<(tiny_http::Server, &'static str)> {
+    match tiny_http::Server::http(("127.0.0.1", port)) {
+        Ok(server) => Ok((server, "127.0.0.1")),
+        Err(v4_err) => match tiny_http::Server::http(("::1", port)) {
+            Ok(server) => Ok((server, "[::1]")),
+            Err(v6_err) => Err(Error::Loopback(format!(
+                "could not bind a loopback listener on 127.0.0.1 ({v4_err}) or ::1 ({v6_err})"
+            ))),
+        },
+    }
+}
+
 /// Assemble the front-channel authorize URL.
-fn build_authorize_url(
+pub(crate) fn build_authorize_url(
     config: &OAuthConfig,
     pkce: &PkceCodes,
     state: &str,
@@ -148,11 +164,13 @@ fn build_authorize_url(
         if let Some(login_hint) = &config.login_hint {
             pairs.push(("login_hint", login_hint));
         }
-        let reserved: Vec<&str> = pairs.iter().map(|(k, _)| *k).collect();
+        // Track every key already destined for the query so no duplicate key is
+        // ever emitted: a custom `extra_authorize_params` entry is dropped when its
+        // key collides with a protocol/typed parameter OR with an earlier custom
+        // entry (first occurrence wins). Some providers reject a repeated query key.
+        let mut seen: std::collections::HashSet<&str> = pairs.iter().map(|(k, _)| *k).collect();
         for (key, value) in &config.extra_authorize_params {
-            if reserved.contains(&key.as_str()) {
-                // A typed field or protocol parameter already owns this key; the
-                // custom duplicate is dropped rather than emitted twice.
+            if !seen.insert(key.as_str()) {
                 continue;
             }
             pairs.push((key, value));
@@ -263,13 +281,18 @@ fn accept_code(
                 respond_html(request, SUCCESS_HTML);
                 return Ok(code);
             }
-            (_, Some(_)) => {
+            (Some(_), Some(_)) => {
+                // A real redirect carried a code, but its state does not match the
+                // anti-CSRF value: a forged or mixed-up authorization. Fail loud.
                 respond(request, 400, "state mismatch");
                 return Err(Error::StateMismatch);
             }
             _ => {
-                // A stray request with neither code nor error: keep waiting.
-                respond(request, 400, "missing authorization code");
+                // Not an authorization redirect (no code): a stray probe or a request
+                // carrying only a `state` param. Any local process can hit this
+                // ephemeral loopback port, so ignore the noise and keep waiting for
+                // the real redirect rather than letting it abort the sign-in.
+                respond(request, 400, "ignored: not an authorization redirect");
             }
         }
     }
