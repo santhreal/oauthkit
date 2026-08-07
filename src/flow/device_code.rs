@@ -93,7 +93,14 @@ pub async fn request(provider: &str, config: &DeviceCodeConfig) -> Result<Device
     }
     let parsed: DeviceAuthorizationResponse = serde_json::from_str(&body)
         .map_err(|e| Error::Malformed(format!("device authorization response: {e}")))?;
-
+    if parsed.device_code.trim().is_empty()
+        || parsed.user_code.trim().is_empty()
+        || parsed.verification_uri.trim().is_empty()
+    {
+        return Err(Error::Malformed(
+            "device authorization response contained empty required fields".to_string(),
+        ));
+    }
     Ok(DeviceAuthorization {
         provider: provider.to_string(),
         config: config.clone(),

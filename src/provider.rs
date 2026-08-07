@@ -319,7 +319,7 @@ impl Registry {
     }
 }
 
-fn validate_url(url: &str, provider_id: &str, field: &str) -> Result<()> {
+pub(crate) fn validate_url(url: &str, provider_id: &str, field: &str) -> Result<()> {
     let parsed = Url::parse(url).map_err(|e| {
         Error::Registry(format!(
             "provider `{provider_id}` {field} is not a valid URL: {e}"

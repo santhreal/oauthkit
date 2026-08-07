@@ -609,6 +609,79 @@ async fn authorization_code_rejects_a_state_mismatch() {
         "expected StateMismatch, got {err:?}"
     );
 }
+#[tokio::test]
+async fn authorization_code_rejects_redirect_with_missing_state() {
+    use std::time::Duration;
+    use crate::Error;
+
+    let config = oauth_config();
+    let begun =
+        authorization_code::begin("example", &config).expect("begin binds a loopback listener");
+    let redirect_uri = begun.session.redirect_uri().to_string();
+
+    let session_task =
+        tokio::spawn(async move { begun.session.wait(Duration::from_secs(5)).await });
+
+    // Deliver a callback with code but NO state.
+    let client = reqwest::Client::new();
+    let request_url = format!("{redirect_uri}?code=the-code");
+    let response = client
+        .get(request_url)
+        .send()
+        .await
+        .expect("client can reach the loopback server");
+    assert_eq!(
+        response.status().as_u16(),
+        400,
+        "browser is told the state mismatched"
+    );
+
+    let err = session_task
+        .await
+        .expect("wait task completed")
+        .expect_err("a missing state on authorization code redirect must fail loud");
+    assert!(
+        matches!(err, Error::StateMismatch),
+        "expected StateMismatch for missing state, got {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn authorization_code_surfaces_error_description_on_error_redirect() {
+    use std::time::Duration;
+    use crate::Error;
+
+    let config = oauth_config();
+    let begun =
+        authorization_code::begin("example", &config).expect("begin binds a loopback listener");
+    let redirect_uri = begun.session.redirect_uri().to_string();
+
+    let session_task =
+        tokio::spawn(async move { begun.session.wait(Duration::from_secs(5)).await });
+
+    let client = reqwest::Client::new();
+    let request_url = format!("{redirect_uri}?error=access_denied&error_description=user%20rejected%20prompt");
+    let response = client
+        .get(request_url)
+        .send()
+        .await
+        .expect("client can reach the loopback server");
+    assert!(response.status().is_success());
+
+    let err = session_task
+        .await
+        .expect("wait task completed")
+        .expect_err("error redirect must fail");
+    match err {
+        Error::Authorization(detail) => {
+            assert!(
+                detail.contains("access_denied: user rejected prompt"),
+                "expected error code and error description in detail, got: {detail}"
+            );
+        }
+        other => panic!("expected Error::Authorization, got {other:?}"),
+    }
+}
 
 #[tokio::test]
 async fn authorization_code_fails_loud_on_an_error_redirect() {
@@ -1369,6 +1442,30 @@ async fn refresh_rejects_a_malformed_success_body() {
         .expect_err("a 200 that is not a valid grant must be rejected, not guessed");
     assert!(matches!(err, Error::Malformed(_)), "got {err:?}");
 }
+#[tokio::test]
+async fn refresh_rejects_empty_access_token() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    use crate::Error;
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "   ",
+            "token_type": "Bearer"
+        })))
+        .mount(&server)
+        .await;
+
+    let err = crate::flow::refresh("example", &format!("{}/token", server.uri()), "client-id", "rt")
+        .await
+        .expect_err("empty access token must fail");
+    assert!(
+        matches!(err, Error::Malformed(ref msg) if msg.contains("empty access_token")),
+        "expected Error::Malformed for empty access token, got {err:?}"
+    );
+}
 
 #[tokio::test]
 async fn refresh_rejects_success_body_without_token_type() {
@@ -1938,6 +2035,33 @@ async fn oidc_discovery_rejects_a_malformed_document_and_a_missing_endpoint() {
         .await
         .expect_err("a discovery document without token_endpoint must be rejected");
     assert!(matches!(err, Error::Malformed(_)), "got {err:?}");
+}
+#[tokio::test]
+async fn oidc_discovery_rejects_non_https_remote_endpoints() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    use crate::Error;
+
+    let server = MockServer::start().await;
+    let metadata_str = serde_json::json!({
+        "issuer": server.uri(),
+        "authorization_endpoint": "http://auth.example.com/oauth/authorize",
+        "token_endpoint": format!("{}/token", server.uri())
+    }).to_string();
+
+    Mock::given(method("GET"))
+        .and(path("/.well-known/openid-configuration"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(metadata_str))
+        .mount(&server)
+        .await;
+
+    let err = crate::discovery::discover(&server.uri())
+        .await
+        .expect_err("non-https authorization_endpoint must be rejected");
+    assert!(
+        matches!(err, Error::Malformed(ref msg) if msg.contains("must use https")),
+        "expected Error::Malformed for non-https endpoint, got {err:?}"
+    );
 }
 
 #[tokio::test]

@@ -1,10 +1,10 @@
 [package]
 name = "oauthkit"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2024"
 rust-version = "1.86"
 description = "Provider-registry-driven OAuth SDK for CLIs: authorization-code+PKCE, device-code, and API-key sign-in across many model providers, with pluggable credential storage."
-authors = ["Santh Project <contact@santh.dev>"]
+authors = ["Santh <64453045+santhreal@users.noreply.github.com>"]
 license = "Apache-2.0"
 repository = "https://github.com/santhreal/oauthkit"
 homepage = "https://santh.dev"

@@ -76,6 +76,22 @@ impl OidcMetadata {
 /// a mix-up defense). It never returns a partial or guessed configuration.
 #[tracing::instrument(level = "debug", skip_all, fields(issuer = %issuer))]
 pub async fn discover(issuer: &str) -> Result<OidcMetadata> {
+    let parsed_issuer = url::Url::parse(issuer)
+        .map_err(|e| Error::Malformed(format!("invalid OIDC issuer URL `{issuer}`: {e}")))?;
+
+    if parsed_issuer.scheme() != "https" && parsed_issuer.scheme() != "http" {
+        return Err(Error::Malformed(format!(
+            "invalid OIDC issuer scheme `{}` in `{issuer}`: must be http or https",
+            parsed_issuer.scheme()
+        )));
+    }
+
+    if parsed_issuer.query().is_some() || parsed_issuer.fragment().is_some() {
+        return Err(Error::Malformed(format!(
+            "OIDC issuer URL `{issuer}` must not contain query or fragment components"
+        )));
+    }
+
     let base = issuer.trim_end_matches('/');
     let url = format!("{base}{WELL_KNOWN_PATH}");
     tracing::debug!("fetching OIDC discovery document");
@@ -105,6 +121,22 @@ pub async fn discover(issuer: &str) -> Result<OidcMetadata> {
             "OIDC issuer mismatch: requested `{base}`, document declares `{}`",
             metadata.issuer
         )));
+    }
+
+    crate::provider::validate_url(&metadata.authorization_endpoint, base, "authorization_endpoint")
+        .map_err(|e| Error::Malformed(format!("OIDC discovery authorization_endpoint: {e}")))?;
+    crate::provider::validate_url(&metadata.token_endpoint, base, "token_endpoint")
+        .map_err(|e| Error::Malformed(format!("OIDC discovery token_endpoint: {e}")))?;
+    if let Some(dev_ep) = &metadata.device_authorization_endpoint {
+        crate::provider::validate_url(dev_ep, base, "device_authorization_endpoint")
+            .map_err(|e| Error::Malformed(format!("OIDC discovery device_authorization_endpoint: {e}")))?;
+    }
+    if let Some(methods) = &metadata.code_challenge_methods_supported {
+        if !methods.iter().any(|m| m == "S256") {
+            return Err(Error::Malformed(
+                "OIDC provider does not support S256 PKCE code challenge method".to_string(),
+            ));
+        }
     }
 
     tracing::debug!(

@@ -139,21 +139,42 @@ pub(crate) async fn post_token_form(
         return Err(Error::Authorization(format!("HTTP {status}")));
     }
 
-    let token: TokenResponse = serde_json::from_str(&body).map_err(|e| {
-        tracing::warn!("token response was not valid JSON");
-        Error::Malformed(format!("token response was not valid JSON: {e}"))
-    })?;
+    let token: TokenResponse = match serde_json::from_str(&body) {
+        Ok(t) => t,
+        Err(e) => {
+            if let Some(detail) = oauth_error_detail(&body) {
+                tracing::warn!(status = %status, error = %detail, "token endpoint returned an OAuth error with 200 status");
+                return Err(Error::Authorization(detail));
+            }
+            tracing::warn!("token response was not valid JSON");
+            return Err(Error::Malformed(format!("token response was not valid JSON: {e}")));
+        }
+    };
+    if token.access_token.trim().is_empty() {
+        return Err(Error::Malformed(
+            "token response contained an empty access_token".to_string(),
+        ));
+    }
+    if token.token_type.trim().is_empty() {
+        return Err(Error::Malformed(
+            "token response contained an empty token_type".to_string(),
+        ));
+    }
+
+    let refresh_token = token
+        .refresh_token
+        .filter(|t| !t.trim().is_empty());
 
     // Record only shape, never the token material.
     tracing::debug!(
-        has_refresh = token.refresh_token.is_some(),
+        has_refresh = refresh_token.is_some(),
         has_expiry = token.expires_in.is_some(),
         "token exchange succeeded"
     );
     Ok(Credential::oauth(
         provider.to_string(),
         token.access_token,
-        token.refresh_token,
+        refresh_token,
         expiry_from_expires_in(token.expires_in),
         Some(token.token_type),
     ))

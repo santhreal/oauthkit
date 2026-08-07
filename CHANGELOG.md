@@ -5,8 +5,20 @@ All notable changes to `oauthkit` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.3] - 2026-08-07
 
+### Fixed
+- Reject authorization-code redirects that carry a code but omit `state`, treating missing `state` as `Error::StateMismatch` instead of a stray probe.
+- Preserve and format `error_description` alongside `error` in authorization-code error redirects (`{error}: {error_description}`).
+- Validate token response access tokens and token types in `post_token_form`, failing loud with `Error::Malformed` on empty or whitespace-only values.
+- Validate non-empty required fields (`device_code`, `user_code`, `verification_uri`) in device authorization responses, failing loud on empty values.
+- Enforce URL validation (HTTPS requirement for remote endpoints) on OIDC discovery endpoints (`authorization_endpoint`, `token_endpoint`, `device_authorization_endpoint`).
+
+### Security
+- Reserved OAuth protocol query parameter collision list in `build_authorize_url` expanded to include `audience`, `prompt`, and `login_hint`.
+
+### Changed
+- Standardized Cargo.toml `authors` to `Santh <64453045+santhreal@users.noreply.github.com>`.
 ## [0.2.2] - 2026-08-06
 
 ### Security

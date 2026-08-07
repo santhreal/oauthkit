@@ -321,27 +321,40 @@ fn accept_code(
         let mut code = None;
         let mut state = None;
         let mut oauth_error = None;
+        let mut oauth_error_desc = None;
         for (key, value) in parsed.query_pairs() {
             match key.as_ref() {
                 "code" => code = Some(value.into_owned()),
                 "state" => state = Some(value.into_owned()),
                 "error" => oauth_error = Some(value.into_owned()),
+                "error_description" => oauth_error_desc = Some(value.into_owned()),
                 _ => {}
             }
         }
 
         if let Some(err) = oauth_error {
+            if let Some(s) = &state {
+                if !constant_time_eq(s, expected_state) {
+                    respond(request, 400, "state mismatch");
+                    return Err(Error::StateMismatch);
+                }
+            }
             respond(request, 200, "sign-in failed; you can close this window");
-            return Err(Error::Authorization(err));
+            let detail = match oauth_error_desc {
+                Some(desc) => format!("{err}: {desc}"),
+                None => err,
+            };
+            return Err(Error::Authorization(detail));
         }
         match (code, state) {
             (Some(code), Some(state)) if constant_time_eq(&state, expected_state) => {
                 respond_html(request, SUCCESS_HTML);
                 return Ok(code);
             }
-            (Some(_), Some(_)) => {
-                // A real redirect carried a code, but its state does not match the
-                // anti-CSRF value: a forged or mixed-up authorization. Fail loud.
+            (Some(_), Some(_)) | (Some(_), None) => {
+                // A real redirect carried an authorization code, but its state is missing
+                // or does not match the anti-CSRF value: a forged or mixed-up authorization.
+                // Fail loud on any state mismatch or missing state.
                 respond(request, 400, "state mismatch");
                 return Err(Error::StateMismatch);
             }
