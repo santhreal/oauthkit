@@ -1,9 +1,10 @@
 [package]
 name = "oauthkit"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 rust-version = "1.86"
 description = "Provider-registry-driven OAuth SDK for CLIs: authorization-code+PKCE, device-code, and API-key sign-in across many model providers, with pluggable credential storage."
+authors = ["Santh Project <contact@santh.dev>"]
 license = "Apache-2.0"
 repository = "https://github.com/santhreal/oauthkit"
 homepage = "https://santh.dev"
@@ -32,9 +33,12 @@ tokio = { version = "1", features = ["time", "rt"] }
 toml = "0.9.5"
 tracing = "0.1"
 url = "2"
+subtle = "2.6"
 
 [dev-dependencies]
 proptest = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
 wiremock = "0.6"
+[package.metadata.santh]
+status = "beta"

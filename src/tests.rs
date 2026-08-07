@@ -2095,6 +2095,73 @@ fn encrypted_store_wrong_key_fails_and_nonces_are_fresh() {
     assert_ne!(a, b, "each seal must use a fresh nonce");
 }
 
+#[test]
+fn authorization_code_begin_with_fixed_redirect_supports_localhost_and_ipv6() {
+    let mut config_lh = oauth_config();
+    config_lh.redirect_uri = Some("http://localhost:0/callback".to_string());
+    let begun_lh = authorization_code::begin("test-lh", &config_lh);
+    assert!(
+        begun_lh.is_ok(),
+        "localhost fixed redirect must bind listener successfully"
+    );
+
+    let mut config_v6 = oauth_config();
+    config_v6.redirect_uri = Some("http://[::1]:0/callback".to_string());
+    let begun_v6 = authorization_code::begin("test-v6", &config_v6);
+    assert!(
+        begun_v6.is_ok(),
+        "IPv6 fixed redirect must bind listener successfully"
+    );
+}
+
+#[test]
+fn build_authorize_url_rejects_extra_params_colliding_with_reserved_keys() {
+    use crate::Error;
+
+    let reserved_keys = [
+        "state",
+        "redirect_uri",
+        "client_id",
+        "response_type",
+        "code_challenge",
+    ];
+    for reserved in reserved_keys {
+        let mut config = oauth_config();
+        config.extra_authorize_params = vec![(reserved.to_string(), "malicious".to_string())];
+        let pkce = crate::pkce::generate_pkce();
+        let result = authorization_code::build_authorize_url(
+            &config,
+            &pkce,
+            "state123",
+            "http://127.0.0.1:8080/callback",
+        );
+        match result {
+            Err(Error::Malformed(msg)) => {
+                assert!(
+                    msg.contains("collides with reserved"),
+                    "expected reserved collision error, got: {msg}"
+                );
+            }
+            other => panic!(
+                "expected Error::Malformed for reserved key '{reserved}', got {:?}",
+                other
+            ),
+        }
+    }
+}
+
+#[test]
+fn constant_time_eq_compares_strings_in_constant_time() {
+    use crate::constant_time_eq;
+
+    assert!(constant_time_eq("secret_token_123", "secret_token_123"));
+    assert!(!constant_time_eq("secret_token_123", "secret_token_124"));
+    assert!(!constant_time_eq("secret_token_123", "secret_token_12"));
+    assert!(!constant_time_eq("secret_token_123", "secret_token_1234"));
+    assert!(constant_time_eq("", ""));
+    assert!(!constant_time_eq("a", ""));
+}
+
 // ---- Property-based (fuzz) coverage ----
 //
 // These stress the pure builders/crypto with thousands of arbitrary inputs,

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-08-06
+
+### Security
+- Compare authorization-code anti-CSRF `state` with constant-time equality.
+- Reject `extra_authorize_params` keys that collide with reserved OAuth protocol parameters instead of silently dropping them after typed params win.
+
+### Fixed
+- Fixed redirect loopback binding now matches the redirect URI host family (`127.0.0.1` / `::1`) with cross-family fallback.
+
+### Changed
+- Declared `package.metadata.santh.status = "beta"` (no fuzz target yet; not `stable`).
+
 ## [0.2.1] - 2026-07-30
 
 ### Security
@@ -98,6 +110,7 @@ standalone, provider-registry-driven OAuth SDK for CLIs.
 - All dependencies pinned to concrete versions (no workspace inheritance);
   `anyhow` removed.
 
-[Unreleased]: https://github.com/santhreal/oauthkit/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/santhreal/oauthkit/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/santhreal/oauthkit/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/santhreal/oauthkit/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/santhreal/oauthkit/releases/tag/v0.1.0

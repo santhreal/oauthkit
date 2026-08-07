@@ -42,7 +42,10 @@ impl std::fmt::Debug for TokenResponse {
         // access/refresh tokens into logs (CWE-532). Record shape only.
         f.debug_struct("TokenResponse")
             .field("access_token", &"<redacted>")
-            .field("refresh_token", &self.refresh_token.as_ref().map(|_| "<redacted>"))
+            .field(
+                "refresh_token",
+                &self.refresh_token.as_ref().map(|_| "<redacted>"),
+            )
             .field("expires_in", &self.expires_in)
             .field("token_type", &self.token_type)
             .finish()

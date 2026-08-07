@@ -26,7 +26,7 @@ use crate::credentials::CredentialStore;
 use crate::error::Error;
 use crate::error::Result;
 
-    /// The ChaCha20-Poly1305 nonce size (RFC 8439: 96 bits).
+/// The ChaCha20-Poly1305 nonce size (RFC 8439: 96 bits).
 const NONCE_LEN: usize = 12;
 
 /// A [`CredentialStore`] that encrypts every credential at rest with a

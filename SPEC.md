@@ -79,7 +79,7 @@ resulting credentials behind a pluggable trait.
 `ApiKeyConfig`; `AuthClient<S: CredentialStore>` with `builtin` / `new`,
 `begin_oauth`, `begin_device`, `complete_device`, `accept_api_key`,
 `api_key_from_env`, `refresh_stored`, `logout`; `Credential`, `CredentialKind`,
-`CredentialStore`, `MemoryStore`; `PkceCodes`, `generate_pkce`, `generate_state`;
+`CredentialStore`, `MemoryStore`; `PkceCodes`, `generate_pkce`, `generate_state`, `constant_time_eq`;
 `discover`, `OidcMetadata`; `Error`, `Result`; `DEFAULT_SIGN_IN_TIMEOUT`. Behind
 the `encrypted-store` feature: `EncryptedStore`.
 

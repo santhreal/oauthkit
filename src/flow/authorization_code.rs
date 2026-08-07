@@ -10,6 +10,7 @@ use std::io::Cursor;
 use std::time::Duration;
 use std::time::Instant;
 
+use subtle::ConstantTimeEq;
 use url::Url;
 
 use crate::credentials::Credential;
@@ -68,8 +69,10 @@ pub fn begin(provider: &str, config: &OAuthConfig) -> Result<BeganAuthorization>
             let port = url.port().ok_or_else(|| {
                 Error::Loopback(format!("fixed redirect_uri `{fixed}` has no explicit port"))
             })?;
-            let server = tiny_http::Server::http(("127.0.0.1", port))
-                .map_err(|e| Error::Loopback(e.to_string()))?;
+            let host_str = url.host_str().ok_or_else(|| {
+                Error::Loopback(format!("fixed redirect_uri `{fixed}` has no host"))
+            })?;
+            let server = bind_loopback_for_host(host_str, port)?;
             let actual_port = server
                 .server_addr()
                 .to_ip()
@@ -129,6 +132,40 @@ fn bind_loopback(port: u16) -> Result<(tiny_http::Server, &'static str)> {
     }
 }
 
+/// Bind a loopback listener matching the host requested by a fixed redirect URI,
+/// with fallback between IPv4 and IPv6 families so the flow works on single-family hosts.
+fn bind_loopback_for_host(host_str: &str, port: u16) -> Result<tiny_http::Server> {
+    let clean_host = host_str.trim_start_matches('[').trim_end_matches(']');
+    if clean_host == "::1" {
+        tiny_http::Server::http(("::1", port)).or_else(|v6_err| {
+            tiny_http::Server::http(("127.0.0.1", port)).map_err(|v4_err| {
+                Error::Loopback(format!(
+                    "could not bind loopback listener on ::1 ({v6_err}) or 127.0.0.1 ({v4_err})"
+                ))
+            })
+        })
+    } else {
+        tiny_http::Server::http(("127.0.0.1", port)).or_else(|v4_err| {
+            tiny_http::Server::http(("::1", port)).map_err(|v6_err| {
+                Error::Loopback(format!(
+                    "could not bind loopback listener on 127.0.0.1 ({v4_err}) or ::1 ({v6_err})"
+                ))
+            })
+        })
+    }
+}
+
+/// Compare two string slices for equality in constant time to prevent timing side channels
+/// when validating security-sensitive values (such as anti-CSRF state tokens).
+pub fn constant_time_eq(a: &str, b: &str) -> bool {
+    let a_bytes = a.as_bytes();
+    let b_bytes = b.as_bytes();
+    if a_bytes.len() != b_bytes.len() {
+        return false;
+    }
+    a_bytes.ct_eq(b_bytes).into()
+}
+
 /// Assemble the front-channel authorize URL.
 pub(crate) fn build_authorize_url(
     config: &OAuthConfig,
@@ -168,9 +205,30 @@ pub(crate) fn build_authorize_url(
         // ever emitted: a custom `extra_authorize_params` entry is dropped when its
         // key collides with a protocol/typed parameter OR with an earlier custom
         // entry (first occurrence wins). Some providers reject a repeated query key.
+        let protocol_reserved: std::collections::HashSet<&str> = [
+            "response_type",
+            "client_id",
+            "redirect_uri",
+            "state",
+            "code_challenge",
+            "code_challenge_method",
+            "scope",
+        ]
+        .into_iter()
+        .collect();
+
         let mut seen: std::collections::HashSet<&str> = pairs.iter().map(|(k, _)| *k).collect();
         for (key, value) in &config.extra_authorize_params {
+            if protocol_reserved.contains(key.as_str()) {
+                return Err(Error::Malformed(format!(
+                    "extra_authorize_params key `{key}` collides with reserved OAuth protocol parameter"
+                )));
+            }
             if !seen.insert(key.as_str()) {
+                tracing::warn!(
+                    key = %key,
+                    "extra_authorize_params key `{key}` collides with typed/earlier parameter and was dropped"
+                );
                 continue;
             }
             pairs.push((key, value));
@@ -277,7 +335,7 @@ fn accept_code(
             return Err(Error::Authorization(err));
         }
         match (code, state) {
-            (Some(code), Some(state)) if state == expected_state => {
+            (Some(code), Some(state)) if constant_time_eq(&state, expected_state) => {
                 respond_html(request, SUCCESS_HTML);
                 return Ok(code);
             }

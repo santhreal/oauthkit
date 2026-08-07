@@ -65,6 +65,7 @@ pub use discovery::discover;
 pub use encrypted_store::EncryptedStore;
 pub use error::Error;
 pub use error::Result;
+pub use flow::authorization_code::constant_time_eq;
 pub use pkce::PkceCodes;
 pub use pkce::generate_pkce;
 pub use pkce::generate_state;

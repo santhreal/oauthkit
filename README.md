@@ -1,5 +1,7 @@
 # oauthkit
 
+[![santh status](https://img.shields.io/badge/santh-beta-yellow)](https://santh.dev/standard)
+
 A provider-registry-driven OAuth SDK for command-line tools. It gives any CLI the
 breadth of model-provider sign-in without hard-coding a single provider.
 
