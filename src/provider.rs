@@ -360,10 +360,10 @@ fn validate_loopback_redirect_uri(redirect_uri: &str, provider_id: &str) -> Resu
         )));
     }
     match parsed.host_str() {
-        Some("127.0.0.1") | Some("localhost") => {}
+        Some("127.0.0.1") | Some("localhost") | Some("::1") | Some("[::1]") => {}
         other => {
             return Err(Error::Registry(format!(
-                "provider `{provider_id}` redirect_uri must point to 127.0.0.1 or localhost, got {other:?}"
+                "provider `{provider_id}` redirect_uri must point to 127.0.0.1, localhost, or [::1], got {other:?}"
             )));
         }
     }

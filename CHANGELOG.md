@@ -5,6 +5,14 @@ All notable changes to `oauthkit` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.4] - 2026-08-07
+### Fixed
+- Require matching anti-CSRF `state` on OAuth error redirects (`?error=...`), failing loud with `Error::StateMismatch` if `state` is missing or mismatched (preventing unauthenticated local session aborts).
+- Allow IPv6 `[::1]` loopback host format in `validate_loopback_redirect_uri` for fixed loopback redirect URIs.
+
+### Added
+- Public `AuthorizationSession::state(&self)` getter for inspecting anti-CSRF state.
+
 ## [0.2.3] - 2026-08-07
 
 ### Fixed

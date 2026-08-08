@@ -248,6 +248,11 @@ impl AuthorizationSession {
         &self.redirect_uri
     }
 
+    /// The anti-CSRF state parameter generated for this session.
+    pub fn state(&self) -> &str {
+        &self.state
+    }
+
     /// Block until the browser redirect arrives (or `timeout` elapses), validate
     /// it, and exchange the authorization code for a [`Credential`].
     #[tracing::instrument(level = "debug", skip_all, fields(provider = %self.provider))]
@@ -333,18 +338,20 @@ fn accept_code(
         }
 
         if let Some(err) = oauth_error {
-            if let Some(s) = &state {
-                if !constant_time_eq(s, expected_state) {
+            match state {
+                Some(s) if constant_time_eq(&s, expected_state) => {
+                    respond(request, 200, "sign-in failed; you can close this window");
+                    let detail = match oauth_error_desc {
+                        Some(desc) => format!("{err}: {desc}"),
+                        None => err,
+                    };
+                    return Err(Error::Authorization(detail));
+                }
+                _ => {
                     respond(request, 400, "state mismatch");
                     return Err(Error::StateMismatch);
                 }
             }
-            respond(request, 200, "sign-in failed; you can close this window");
-            let detail = match oauth_error_desc {
-                Some(desc) => format!("{err}: {desc}"),
-                None => err,
-            };
-            return Err(Error::Authorization(detail));
         }
         match (code, state) {
             (Some(code), Some(state)) if constant_time_eq(&state, expected_state) => {

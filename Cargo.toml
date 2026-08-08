@@ -1,6 +1,6 @@
 [package]
 name = "oauthkit"
-version = "0.2.3"
+version = "0.2.4"
 edition = "2024"
 rust-version = "1.86"
 description = "Provider-registry-driven OAuth SDK for CLIs: authorization-code+PKCE, device-code, and API-key sign-in across many model providers, with pluggable credential storage."

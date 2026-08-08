@@ -655,12 +655,13 @@ async fn authorization_code_surfaces_error_description_on_error_redirect() {
     let begun =
         authorization_code::begin("example", &config).expect("begin binds a loopback listener");
     let redirect_uri = begun.session.redirect_uri().to_string();
+    let state = begun.session.state().to_string();
 
     let session_task =
         tokio::spawn(async move { begun.session.wait(Duration::from_secs(5)).await });
 
     let client = reqwest::Client::new();
-    let request_url = format!("{redirect_uri}?error=access_denied&error_description=user%20rejected%20prompt");
+    let request_url = format!("{redirect_uri}?error=access_denied&error_description=user%20rejected%20prompt&state={state}");
     let response = client
         .get(request_url)
         .send()
@@ -693,13 +694,14 @@ async fn authorization_code_fails_loud_on_an_error_redirect() {
     let begun =
         authorization_code::begin("example", &config).expect("begin binds a loopback listener");
     let redirect_uri = begun.session.redirect_uri().to_string();
+    let state = begun.session.state().to_string();
 
     let session_task =
         tokio::spawn(async move { begun.session.wait(Duration::from_secs(5)).await });
 
     // The provider redirected with `?error=` instead of a code (user denied consent).
     let client = reqwest::Client::new();
-    let request_url = format!("{redirect_uri}?error=access_denied");
+    let request_url = format!("{redirect_uri}?error=access_denied&state={state}");
     let response = client
         .get(request_url)
         .send()
@@ -721,6 +723,58 @@ async fn authorization_code_fails_loud_on_an_error_redirect() {
         ),
         other => panic!("expected Error::Authorization, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn authorization_code_rejects_error_redirect_with_missing_or_mismatched_state() {
+    use std::time::Duration;
+    use crate::Error;
+
+    // Test 1: missing state on error redirect fails loud with StateMismatch (preventing unauthenticated DoS).
+    let config = oauth_config();
+    let begun =
+        authorization_code::begin("example", &config).expect("begin binds a loopback listener");
+    let redirect_uri = begun.session.redirect_uri().to_string();
+
+    let session_task =
+        tokio::spawn(async move { begun.session.wait(Duration::from_secs(5)).await });
+
+    let client = reqwest::Client::new();
+    let request_url = format!("{redirect_uri}?error=access_denied");
+    let response = client
+        .get(request_url)
+        .send()
+        .await
+        .expect("client can reach the loopback server");
+    assert_eq!(response.status().as_u16(), 400);
+
+    let err = session_task
+        .await
+        .expect("wait task completed")
+        .expect_err("an error redirect missing anti-CSRF state must fail");
+    assert!(matches!(err, Error::StateMismatch));
+
+    // Test 2: mismatched state on error redirect fails loud with StateMismatch.
+    let begun2 =
+        authorization_code::begin("example", &config).expect("begin binds a loopback listener");
+    let redirect_uri2 = begun2.session.redirect_uri().to_string();
+
+    let session_task2 =
+        tokio::spawn(async move { begun2.session.wait(Duration::from_secs(5)).await });
+
+    let request_url2 = format!("{redirect_uri2}?error=access_denied&state=forged-state");
+    let response2 = client
+        .get(request_url2)
+        .send()
+        .await
+        .expect("client can reach the loopback server");
+    assert_eq!(response2.status().as_u16(), 400);
+
+    let err2 = session_task2
+        .await
+        .expect("wait task completed")
+        .expect_err("an error redirect with forged anti-CSRF state must fail");
+    assert!(matches!(err2, Error::StateMismatch));
 }
 
 #[tokio::test]
@@ -1215,7 +1269,7 @@ redirect_uri = "http://example.com:8080/callback"
     )
     .unwrap_err();
     assert!(
-        err.to_string().contains("127.0.0.1 or localhost"),
+        err.to_string().contains("must point to 127.0.0.1, localhost, or [::1]"),
         "got {err}"
     );
 
@@ -1235,6 +1289,25 @@ redirect_uri = "http://127.0.0.1/callback"
     )
     .unwrap_err();
     assert!(err.to_string().contains("explicit port"), "got {err}");
+}
+
+#[test]
+fn registry_accepts_ipv6_loopback_redirect_uri() {
+    let registry = Registry::from_toml(
+        r#"
+[[provider]]
+id = "v6-provider"
+display_name = "IPv6 Provider"
+
+[[provider.methods]]
+flow = "oauth"
+authorize_url = "https://auth.example.com/authorize"
+token_url = "https://auth.example.com/token"
+client_id = "client"
+redirect_uri = "http://[::1]:8080/callback"
+"#,
+    );
+    assert!(registry.is_ok(), "Registry must accept IPv6 [::1] loopback redirect_uri: {:?}", registry.err());
 }
 
 #[test]
